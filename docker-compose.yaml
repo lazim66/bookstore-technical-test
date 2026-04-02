@@ -1,0 +1,41 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: technical-test-api
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload
+
+  db:
+    image: pgvector/pgvector:pg13
+    container_name: technical-test-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: technical_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: technical-test-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
