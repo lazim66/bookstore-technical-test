@@ -4,6 +4,12 @@
 
 All technical decisions, trade-offs, and implementation details are documented in **[TECHNICAL_COMMENTARY.md](./TECHNICAL_COMMENTARY.md)**.
 
+To run the project, add your OpenAI API key to `.env` (required for summary generation and semantic search):
+```bash
+cp .env.example .env
+# Edit .env and set OPENAI_API_KEY=your-key-here
+```
+
 To see every feature in action, please run the end-to-end smoke test:
 ```bash
 just start             # Start all services

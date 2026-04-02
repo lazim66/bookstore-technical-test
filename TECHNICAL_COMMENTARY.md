@@ -194,6 +194,8 @@ technical-test-python/
 The best way to see every feature in action is to run the smoke test. It exercises the full system against the live Docker stack with real HTTP requests and real OpenAI calls, and takes about a minute:
 
 ```bash
+cp .env.example .env
+# Set OPENAI_API_KEY in .env (required for summary generation and semantic search)
 just start             # Start all services
 just smoke-test        # 42 checks with real LLM calls
 ```
