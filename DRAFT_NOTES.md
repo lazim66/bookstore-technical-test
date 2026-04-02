@@ -221,3 +221,10 @@ Moved `seed_admin()` from `app_lifespan.py` to a dedicated `src/utils/seed.py` m
 
 **Code review caught `full_text` leaking in list responses.** The initial `BookOutput` included `full_text`, which would serialise potentially large book texts for every item in list responses. We split into `BookOutput` (for lists) and `BookDetailOutput` (for single-book retrieval). A good reminder that response schemas should be designed from the consumer's perspective, not just the data model.
 
+### Post-review fixes (permissions feature)
+
+A second code review pass across the permissions code caught three issues worth addressing:
+- **Role type safety**: Replaced regex-based role validation (`pattern="^(customer|admin)$"`) with `Literal["customer", "admin"]` on all Pydantic schemas. This gives better IDE support, clearer error messages, and type-level enforcement. The DB model remains `str` due to a SQLModel limitation with `Literal`, but validation at the API boundary is what matters.
+- **Self-protection guard**: Added checks preventing admins from deleting their own account or changing their own role — otherwise an admin could accidentally lock out all admin access.
+- **Signup role injection test**: Added a test that explicitly passes `"role": "admin"` in a signup payload and verifies it's ignored, ensuring users cannot self-assign admin privileges.
+

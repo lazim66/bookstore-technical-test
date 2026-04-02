@@ -1,5 +1,8 @@
 """Standalone seed script — run without restarting the API.
 
+Requires the API to have started at least once (to create DB tables).
+If tables don't exist yet, run `just start` first.
+
 Usage:
     just seed
     # or: docker compose exec api python scripts/seed.py

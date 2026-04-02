@@ -444,6 +444,41 @@ async def test_signup_always_creates_customer(customer_client: AsyncClient):
     assert response.json()["role"] == "customer"
 
 
+@pytest.mark.asyncio(loop_scope="function")
+async def test_signup_ignores_role_field(customer_client: AsyncClient):
+    """Passing role in the signup payload should not grant admin access."""
+    signup_data = {
+        "email": f"sneaky_{uuid.uuid4()}@example.com",
+        "full_name": "Sneaky User",
+        "password": "password12345",
+        "role": "admin",
+    }
+    response = await customer_client.post("/api/v1/users/signup", json=signup_data)
+    assert response.status_code == 201
+    assert response.json()["role"] == "customer"
+
+
+# =============================================================================
+# Self-protection: admin cannot delete or demote themselves
+# =============================================================================
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_admin_cannot_delete_self(authenticated_client: AsyncClient, test_user: DBUser):
+    response = await authenticated_client.delete(f"/api/v1/users/{test_user.id}")
+    assert response.status_code == 400
+    assert "own account" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_admin_cannot_change_own_role(authenticated_client: AsyncClient, test_user: DBUser):
+    response = await authenticated_client.patch(
+        f"/api/v1/users/{test_user.id}/role", json={"role": "customer"}
+    )
+    assert response.status_code == 400
+    assert "own role" in response.json()["detail"].lower()
+
+
 # =============================================================================
 # UserOutput includes role field
 # =============================================================================

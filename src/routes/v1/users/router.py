@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from src.db.models import DBUser
 from src.routes.v1.users.schema import (
     AdminUserCreateInput,
@@ -74,6 +74,8 @@ async def update_user_role(
     user_service: UserService = Depends(get_user_service),
     current_user: DBUser = Depends(require_admin),
 ):
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
     user = await user_service.update_role(user_id=user_id, role=role_input.role)
     return UserOutput(**user.model_dump())
 
@@ -84,4 +86,6 @@ async def admin_delete_user(
     user_service: UserService = Depends(get_user_service),
     current_user: DBUser = Depends(require_admin),
 ):
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
     await user_service.hard_delete(user_id=user_id)

@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 
 import bcrypt
@@ -46,7 +47,7 @@ class AdminUserCreateInput(BaseModel):
     email: str
     full_name: str = Field(min_length=1)
     password: str = Field(min_length=8)
-    role: str = Field(default="customer", pattern="^(customer|admin)$")
+    role: Literal["customer", "admin"] = "customer"
     hashed_password: str | None = None
 
     @model_validator(mode="after")
@@ -61,14 +62,14 @@ class AdminUserCreateInput(BaseModel):
 
 
 class RoleUpdateInput(BaseModel):
-    role: str = Field(pattern="^(customer|admin)$")
+    role: Literal["customer", "admin"]
 
 
 class UserOutput(BaseModel):
     id: UUID
     email: str
     full_name: str
-    role: str
+    role: Literal["customer", "admin"]
 
 
 class TokenResponse(BaseModel):
