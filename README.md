@@ -20,6 +20,10 @@ The smoke test exercises permissions, summary generation (real OpenAI), and sema
 
 ---
 
+*Original README below (unchanged)*
+
+---
+
 Welcome! This is a **backend and agents-focused technical test** designed to assess your ability to:
 
 1. **Produce production-ready code** - Write clean, maintainable, well-tested code that follows best practices
