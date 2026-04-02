@@ -1,5 +1,19 @@
 # Backend & Agents Technical Test
 
+## Submission Notes from Lazim
+
+All technical decisions, trade-offs, and implementation details are documented in **[TECHNICAL_COMMENTARY.md](./TECHNICAL_COMMENTARY.md)**.
+
+To see every feature in action, please run the end-to-end smoke test:
+```bash
+just start             # Start all services
+just smoke-test        # 42 checks across all features with real LLM calls (~1 min)
+```
+
+The smoke test exercises permissions, summary generation (real OpenAI), and semantic search (real embeddings) against the live Docker stack, showing actual outputs. It cleans up after itself automatically.
+
+---
+
 Welcome! This is a **backend and agents-focused technical test** designed to assess your ability to:
 
 1. **Produce production-ready code** - Write clean, maintainable, well-tested code that follows best practices
