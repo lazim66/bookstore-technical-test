@@ -64,3 +64,7 @@ class UserService:
     async def delete(self, user_id: uuid.UUID) -> None:
         user = await self.retrieve(user_id=user_id)
         await self.repository.update(user_id=user.id, is_active=False)
+
+    async def hard_delete(self, user_id: uuid.UUID) -> None:
+        await self.retrieve(user_id=user_id)
+        await self.repository.delete(user_id=user_id)

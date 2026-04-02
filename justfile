@@ -25,6 +25,14 @@ shell:
 test:
     docker compose exec api pytest tests/ -v
 
+# Run database seeds (creates initial admin user)
+seed:
+    docker compose exec api python scripts/seed.py
+
+# Run smoke tests against live API (requires `just start` first)
+smoke-test:
+    python3 scripts/smoke_test.py
+
 # Reset database (drop and recreate)
 db-reset:
     docker compose down db

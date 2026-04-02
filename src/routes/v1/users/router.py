@@ -76,3 +76,12 @@ async def update_user_role(
 ):
     user = await user_service.update_role(user_id=user_id, role=role_input.role)
     return UserOutput(**user.model_dump())
+
+
+@router.delete("/{user_id}", status_code=204)
+async def admin_delete_user(
+    user_id: UUID,
+    user_service: UserService = Depends(get_user_service),
+    current_user: DBUser = Depends(require_admin),
+):
+    await user_service.hard_delete(user_id=user_id)

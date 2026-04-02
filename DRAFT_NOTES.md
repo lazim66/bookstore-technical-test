@@ -125,3 +125,48 @@ Solution: Do NOT override `require_admin` in any fixture. Let FastAPI's DI chain
 
 **Result: 89 tests passing (59 original + 30 new)**
 
+---
+
+## Developer Experience: Smoke Test Script
+
+### Why we added `scripts/smoke_test.py`
+
+The pytest suite (89 tests) mocks authentication via FastAPI's dependency override system — `authenticate_user` is replaced with a function that returns a test user directly, bypassing Redis sessions entirely. This is correct for unit/integration testing but leaves blind spots:
+
+- **Real auth flow never tested**: signup → password hashing → login → Redis session → bearer token → authenticated request
+- **Seed admin never verified**: we seed an admin on startup but no automated test confirms it can actually log in
+- **Cross-service wiring**: DB ↔ Redis ↔ API working together as deployed
+
+The smoke test script fills this gap by making real HTTP requests to the live Docker stack.
+
+### Why an httpx smoke test script
+
+We needed a way to verify the live API end-to-end beyond the mocked pytest suite. An httpx Python script was the natural choice: httpx is already a project dependency (`pyproject.toml`), Python is the project language, and multi-step flows (login → capture token → use in next request → assert) are trivially expressed in Python compared to shell scripting. The result is a single file that reads like a user story and runs with one command.
+
+### How it works
+
+`just smoke-test` (or `python3 scripts/smoke_test.py`) runs 27 checks across 8 user stories against `http://localhost:8080`:
+1. Health check
+2. Customer signup → login → profile (real Redis session)
+3. Seed admin login (verifies bootstrap worked)
+4. Admin creates author + book + updates price
+5. Customer browses catalog (read access confirmed)
+6. Customer denied all catalog writes (6 × 403)
+7. Customer order lifecycle (create → list → view → update)
+8. Admin user management (create → promote → demote)
+
+Output is a narrated log — reviewers read it and immediately understand the permission model and user flows without reading code.
+
+### Cleanup and idempotency
+
+The smoke test tracks every resource it creates (users, authors, books, orders) and deletes them in a `finally` block in reverse dependency order (orders → books → authors → users), returning the DB to seed state. This means:
+- Running it 10 times doesn't accumulate junk data
+- The DB is always in a known state after the test, whether it passed or failed
+- This follows the standard test pattern: setup → exercise → verify → **teardown**
+
+To support cleanup, we added `DELETE /api/v1/users/{user_id}` (admin-only, hard delete) — a natural completion of the admin user management story (create, promote, demote, delete).
+
+### Seed module extraction
+
+Moved `seed_admin()` from `app_lifespan.py` to a dedicated `src/utils/seed.py` module. The lifespan handler now only manages infrastructure (DB connections, table creation) and calls `run_all_seeds()`. The seed logic is also callable independently via `just seed` / `scripts/seed.py` for re-seeding after a `db-reset` without restarting the API. This separates infrastructure lifecycle from business data seeding.
+

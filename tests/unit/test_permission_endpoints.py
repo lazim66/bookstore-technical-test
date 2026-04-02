@@ -399,6 +399,35 @@ async def test_customer_cannot_promote_user(customer_client: AsyncClient, test_c
 
 
 # =============================================================================
+# Admin delete user endpoint
+# =============================================================================
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_admin_can_delete_user(
+    authenticated_client: AsyncClient, test_customer: DBUser, user_service: UserService
+):
+    response = await authenticated_client.delete(f"/api/v1/users/{test_customer.id}")
+    assert response.status_code == 204
+
+    # Verify user is gone from database
+    with pytest.raises(Exception):
+        await user_service.retrieve(user_id=test_customer.id)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_admin_delete_nonexistent_user(authenticated_client: AsyncClient):
+    response = await authenticated_client.delete(f"/api/v1/users/{uuid.uuid4()}")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_customer_cannot_delete_user(customer_client: AsyncClient, test_customer: DBUser):
+    response = await customer_client.delete(f"/api/v1/users/{test_customer.id}")
+    assert response.status_code == 403
+
+
+# =============================================================================
 # Signup always creates customer (cannot self-assign admin)
 # =============================================================================
 
