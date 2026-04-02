@@ -286,3 +286,9 @@ A second code review pass across the permissions code caught three issues worth 
 - **Semantic quality tests**: Seed books matching the README's examples ("mystery set in Tokyo", "sci-fi about time travel", irrelevant "cookbook"). Verify the right books rank first for the matching queries.
 - **Smoke test**: Real OpenAI embedding call + real search against the live API to verify end-to-end integration.
 
+### Implementation Notes
+
+**Global LLM mock was necessary.** Once embedding generation was wired into `create_book` (synchronous for books without full_text), ALL existing book tests started failing because they hit the real OpenAI API. The fix was a global `autouse` LLM mock fixture in `conftest.py` that returns a zero vector for embeddings and a canned summary. Individual test modules (summary tests, search tests) override this with their own mocks when they need specific behaviour. This pattern — global no-op mock with per-module overrides — is the standard approach for external service dependencies in test suites.
+
+**Search tests use crafted vectors, not real embeddings.** Rather than mocking OpenAI to return specific embeddings (which would test OpenAI's model, not our code), we seed books with manually constructed vectors where we control which are similar. This isolates the test to our search logic: pgvector cosine similarity, ranking, filtering, and response formatting. Real embedding quality is verified in the smoke test.
+

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from uuid import UUID
 
 from sqlmodel import select
@@ -33,3 +35,24 @@ class BookRepository:
     async def delete(self, book_id: UUID) -> None:
         book = await self.retrieve(book_id)
         await self.db_session.delete(book)
+
+    async def semantic_search(
+        self, query_embedding: list[float], limit: int = 10
+    ) -> list[tuple[DBBook, float]]:
+        """Find books by cosine similarity to the query embedding.
+
+        Returns (book, similarity_score) tuples ranked by relevance.
+        Only includes books that have an embedding.
+        Similarity is 1 - cosine_distance (higher = more similar).
+        """
+        distance = DBBook.embedding.cosine_distance(query_embedding)
+        similarity = (1 - distance).label("similarity")
+
+        stmt = (
+            select(DBBook, similarity)
+            .where(DBBook.embedding.isnot(None))  # noqa: E711
+            .order_by(distance)
+            .limit(limit)
+        )
+        result = await self.db_session.exec(stmt)
+        return [(row[0], round(float(row[1]), 4)) for row in result.all()]

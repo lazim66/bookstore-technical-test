@@ -1,15 +1,18 @@
 """Pytest configuration and fixtures."""
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+import sqlalchemy
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
-from src.db.models import DBUser
+from src.db.models import DBUser, EMBEDDING_DIMENSIONS
 from src.db.operations import ManagedAsyncSession, get_db_session
 from src.main import app
 from src.routes.v1.authors.service import AuthorService
@@ -18,6 +21,7 @@ from src.routes.v1.orders.service import OrderService
 from src.routes.v1.users.service import UserService
 from src.settings import settings
 from src.utils.auth import authenticate_user, hash_password
+from src.utils.llm import LLMService, get_llm_service
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -31,6 +35,7 @@ async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
     )
 
     async with engine.begin() as conn:
+        await conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(SQLModel.metadata.create_all)
 
     yield engine
@@ -51,6 +56,27 @@ async def db_session(test_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, N
         except Exception:
             await session.rollback()
             raise
+
+
+@pytest.fixture(autouse=True)
+def _mock_llm_service():
+    """Global mock for the LLM service — prevents real OpenAI API calls in tests.
+
+    Returns a zero vector for embeddings and a canned summary.
+    Individual test modules can override this with their own mock.
+    """
+    mock_service = LLMService.__new__(LLMService)
+    mock_service._model = "test-model"
+    mock_service._embedding_model = "test-embedding"
+    mock_service._semaphore = asyncio.Semaphore(5)
+    mock_service.generate_summary = AsyncMock(return_value="A test summary.")
+    mock_service.generate_embedding = AsyncMock(
+        return_value=[0.0] * EMBEDDING_DIMENSIONS
+    )
+
+    app.dependency_overrides[get_llm_service] = lambda: mock_service
+    yield mock_service
+    app.dependency_overrides.pop(get_llm_service, None)
 
 
 @pytest_asyncio.fixture

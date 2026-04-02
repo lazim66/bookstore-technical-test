@@ -1,9 +1,13 @@
 """Database models using SQLModel."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlmodel import Field, SQLModel
+from pgvector.sqlalchemy import Vector
+from sqlmodel import Column, Field, SQLModel
+
+EMBEDDING_DIMENSIONS = 1536
 
 
 class DBUser(SQLModel, table=True):
@@ -44,6 +48,7 @@ class DBBook(SQLModel, table=True):
     description: str | None = Field(default=None)
     full_text: str | None = Field(default=None)
     summary: str | None = Field(default=None)
+    embedding: Any = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSIONS)))
     price: float
     published_date: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow)

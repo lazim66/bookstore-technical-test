@@ -62,11 +62,13 @@ def _make_test_session_factory(engine: AsyncEngine):
 
 @pytest.fixture
 def mock_llm_service() -> LLMService:
-    """LLM service with a mocked generate_summary for testing."""
+    """LLM service with mocked summary and embedding generation."""
     service = LLMService.__new__(LLMService)
     service._model = "test-model"
+    service._embedding_model = "test-embedding"
     service._semaphore = asyncio.Semaphore(5)
     service.generate_summary = AsyncMock(return_value="A compelling test summary.")
+    service.generate_embedding = AsyncMock(return_value=[0.1] * 1536)
     return service
 
 
@@ -430,6 +432,8 @@ async def test_concurrent_summaries_respect_semaphore_limit(
     # generate_summary, so tracked_generate runs INSIDE the semaphore
     tight_llm = LLMService.__new__(LLMService)
     tight_llm._model = "test-model"
+    tight_llm._embedding_model = "test-embedding"
+    tight_llm.generate_embedding = AsyncMock(return_value=[0.0] * 1536)
     tight_llm._semaphore = asyncio.Semaphore(max_concurrent)
     tight_llm._client = None  # Not used — generate_summary is replaced
 

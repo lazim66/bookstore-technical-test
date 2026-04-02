@@ -3,6 +3,7 @@
 import logging
 from contextlib import asynccontextmanager
 
+import sqlalchemy
 from fastapi import FastAPI
 from sqlmodel import SQLModel
 
@@ -17,6 +18,7 @@ async def database():
     """Initialize database tables on startup."""
     logger.info("Creating database tables...")
     async with async_engine.begin() as conn:
+        await conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(SQLModel.metadata.create_all)
     logger.info("Database tables created successfully")
     yield

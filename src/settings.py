@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # LLM (OpenAI)
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-5.4-nano"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     LLM_MAX_CONCURRENT_REQUESTS: int = 5
 
     @computed_field

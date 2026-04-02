@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import uuid
 
 from fastapi import Depends, HTTPException
@@ -41,3 +43,10 @@ class BookService:
     async def delete(self, book_id: uuid.UUID) -> None:
         book = await self.retrieve(book_id=book_id)
         await self.repository.delete(book_id=book.id)
+
+    async def semantic_search(
+        self, query_embedding: list[float], limit: int = 10
+    ) -> list[tuple[DBBook, float]]:
+        return await self.repository.semantic_search(
+            query_embedding=query_embedding, limit=limit,
+        )

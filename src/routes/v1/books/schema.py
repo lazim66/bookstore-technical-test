@@ -19,6 +19,7 @@ class BookUpdateInput(BaseModel):
     description: str | None = None
     full_text: str | None = None
     summary: str | None = None
+    embedding: list[float] | None = Field(default=None, json_schema_extra={"hidden": True})
     price: float | None = Field(default=None, gt=0)
     published_date: datetime | None = None
 
@@ -41,3 +42,9 @@ class BookDetailOutput(BookOutput):
     """
 
     full_text: str | None
+
+
+class SearchResultOutput(BookOutput):
+    """Book with a relevance score from semantic search."""
+
+    relevance: float

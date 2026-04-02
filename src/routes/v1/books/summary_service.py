@@ -1,15 +1,15 @@
-"""Service for generating and backfilling book summaries.
+"""Service for generating book summaries and embeddings.
 
-Separated from BookService because summary generation:
-- Runs asynchronously (background tasks after book creation)
-- Needs independent DB sessions for concurrent operations
-- Has different dependencies (LLM service)
+Separated from BookService because these operations:
+- Run asynchronously (background tasks after book creation)
+- Need independent DB sessions for concurrent operations
+- Have different dependencies (LLM service)
 
-The service provides two modes of operation:
-- generate_summary_text(): Pure LLM call, returns text. Used by synchronous
-  endpoints where the caller manages the DB session.
-- generate_for_book(): Self-contained background operation with its own DB
-  session. Used by background tasks and backfill (asyncio.gather).
+Provides two modes of operation:
+- Pure functions (generate_summary_text, generate_embedding_for_text):
+  No DB interaction — the caller manages persistence. Used by synchronous endpoints.
+- Self-contained operations (generate_for_book, generate_embedding_for_book):
+  Own DB session, safe for background tasks and asyncio.gather.
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from sqlmodel import select
 
 from src.db.models import DBBook
 from src.db.operations import managed_session
-from src.utils.llm import LLMService
+from src.utils.llm import LLMService, compose_embedding_text
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +43,33 @@ class SummaryService:
         self._llm = llm_service
         self._session_factory = session_factory or managed_session
 
-    async def generate_summary_text(self, full_text: str) -> str:
-        """Generate a summary from text. Pure LLM call — no DB interaction.
+    # ── Pure LLM calls (no DB) ───────────────────────────────────────────
 
-        Used by synchronous endpoints where the caller handles persistence.
-        """
+    async def generate_summary_text(self, full_text: str) -> str:
+        """Generate a summary from text. Caller handles persistence."""
         return await self._llm.generate_summary(full_text)
 
+    async def generate_embedding_for_text(
+        self, title: str, description: str | None, summary: str | None
+    ) -> list[float]:
+        """Generate an embedding from book metadata. Caller handles persistence."""
+        text = compose_embedding_text(title, description, summary)
+        return await self._llm.generate_embedding(text)
+
+    async def generate_query_embedding(self, query: str) -> list[float]:
+        """Generate an embedding for a search query (raw text, no formatting)."""
+        return await self._llm.generate_embedding(query)
+
+    # ── Self-contained operations (own DB session) ───────────────────────
+
     async def generate_for_book(self, book_id: uuid.UUID) -> bool:
-        """Generate and persist a summary for a single book.
+        """Generate summary AND embedding for a single book.
 
         Creates its own DB session, making it safe to run concurrently
-        via asyncio.gather and as a background task (where the request
-        session is already closed).
+        via asyncio.gather and as a background task.
 
-        Returns True if summary was generated, False otherwise.
+        Flow: fetch book → generate summary → generate embedding → persist both.
+        Returns True if successful, False otherwise.
         """
         async with self._session_factory() as session:
             stmt = select(DBBook).where(DBBook.id == book_id)
@@ -65,28 +77,59 @@ class SummaryService:
             book = result.first()
 
             if not book:
-                logger.warning("Book %s not found for summary generation", book_id)
+                logger.warning("Book %s not found for generation", book_id)
                 return False
 
             if not book.full_text:
-                logger.info("Book %s has no full_text, skipping summary", book_id)
+                logger.info("Book %s has no full_text, skipping", book_id)
                 return False
 
             try:
                 summary = await self._llm.generate_summary(book.full_text)
                 book.summary = summary
+
+                text = compose_embedding_text(book.title, book.description, summary)
+                book.embedding = await self._llm.generate_embedding(text)
+
                 await session.flush()
-                logger.info("Summary saved for book %s", book_id)
+                logger.info("Summary and embedding saved for book %s", book_id)
                 return True
             except Exception:
-                logger.exception("Failed to generate summary for book %s", book_id)
+                logger.exception("Failed to generate for book %s", book_id)
                 return False
 
-    async def backfill(self) -> BackfillResult:
-        """Find all books with full_text but no summary, and generate summaries.
+    async def generate_embedding_for_book(self, book_id: uuid.UUID) -> bool:
+        """Generate (or regenerate) the embedding for a single book.
 
-        Each book gets its own DB session and LLM call. The LLM service's
-        semaphore controls how many run in parallel.
+        Uses the book's current title, description, and summary.
+        Own DB session — safe for concurrent use.
+        """
+        async with self._session_factory() as session:
+            stmt = select(DBBook).where(DBBook.id == book_id)
+            result = await session.exec(stmt)
+            book = result.first()
+
+            if not book:
+                logger.warning("Book %s not found for embedding", book_id)
+                return False
+
+            try:
+                text = compose_embedding_text(book.title, book.description, book.summary)
+                book.embedding = await self._llm.generate_embedding(text)
+                await session.flush()
+                logger.info("Embedding saved for book %s", book_id)
+                return True
+            except Exception:
+                logger.exception("Failed to generate embedding for book %s", book_id)
+                return False
+
+    # ── Backfill operations ──────────────────────────────────────────────
+
+    async def backfill(self) -> BackfillResult:
+        """Generate summaries and embeddings for books that need them.
+
+        Targets books with full_text but no summary. Each book gets its own
+        DB session. The LLM service's semaphore controls parallelism.
         """
         async with self._session_factory() as session:
             stmt = select(DBBook.id).where(
@@ -100,7 +143,7 @@ class SummaryService:
             logger.info("No books need summary backfill")
             return BackfillResult(attempted=0, succeeded=0, failed=0, book_ids=[])
 
-        logger.info("Backfilling summaries for %d books", len(book_ids))
+        logger.info("Backfilling summaries and embeddings for %d books", len(book_ids))
 
         results = await asyncio.gather(
             *(self.generate_for_book(book_id) for book_id in book_ids)
@@ -109,6 +152,39 @@ class SummaryService:
         succeeded = sum(1 for r in results if r)
         failed = sum(1 for r in results if not r)
         logger.info("Backfill complete: %d succeeded, %d failed", succeeded, failed)
+
+        return BackfillResult(
+            attempted=len(book_ids),
+            succeeded=succeeded,
+            failed=failed,
+            book_ids=book_ids,
+        )
+
+    async def backfill_embeddings(self) -> BackfillResult:
+        """Regenerate embeddings for all books that have no embedding.
+
+        Useful after bulk summary generation, or for books created before
+        the embedding feature existed.
+        """
+        async with self._session_factory() as session:
+            stmt = select(DBBook.id).where(
+                DBBook.embedding.is_(None),  # noqa: E711
+            )
+            result = await session.exec(stmt)
+            book_ids = list(result.all())
+
+        if not book_ids:
+            logger.info("No books need embedding backfill")
+            return BackfillResult(attempted=0, succeeded=0, failed=0, book_ids=[])
+
+        logger.info("Backfilling embeddings for %d books", len(book_ids))
+
+        results = await asyncio.gather(
+            *(self.generate_embedding_for_book(book_id) for book_id in book_ids)
+        )
+
+        succeeded = sum(1 for r in results if r)
+        failed = sum(1 for r in results if not r)
 
         return BackfillResult(
             attempted=len(book_ids),
