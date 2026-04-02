@@ -290,5 +290,23 @@ A second code review pass across the permissions code caught three issues worth 
 
 **Global LLM mock was necessary.** Once embedding generation was wired into `create_book` (synchronous for books without full_text), ALL existing book tests started failing because they hit the real OpenAI API. The fix was a global `autouse` LLM mock fixture in `conftest.py` that returns a zero vector for embeddings and a canned summary. Individual test modules (summary tests, search tests) override this with their own mocks when they need specific behaviour. This pattern — global no-op mock with per-module overrides — is the standard approach for external service dependencies in test suites.
 
+**Smoke test caught a resilience bug.** When the OpenAI API was unavailable (quota exceeded), the embedding generation in `create_book` raised an unhandled exception, returning a 500 error to the admin — meaning the book wasn't created at all. This is wrong: embedding is a non-critical enhancement. Book creation should always succeed; the embedding can be backfilled later. We wrapped embedding generation in try/except in both `create_book` and `update_book`, logging a warning on failure. This is a good example of the smoke test catching issues that mocked unit tests cannot — the unit tests never hit the real API, so they'd never trigger a quota error.
+
 **Search tests use crafted vectors, not real embeddings.** Rather than mocking OpenAI to return specific embeddings (which would test OpenAI's model, not our code), we seed books with manually constructed vectors where we control which are similar. This isolates the test to our search logic: pgvector cosine similarity, ranking, filtering, and response formatting. Real embedding quality is verified in the smoke test.
+
+### End-to-end verification (smoke test with real LLM)
+
+We ran the full smoke test against the live API with real OpenAI calls. Key observations:
+
+**Summary generation quality:**
+- Background task generated a 157-word summary in ~4 seconds — well within our 150-250 word target
+- The summary accurately captures the book's themes and plot: *"Inspector Kenji Tanaka has solved crimes for two decades in the rain-soaked streets of Shinjuku—but three disappearances in Golden Gai shake his world..."*
+- The explicit `/summarize` endpoint correctly identifies time-travel themes in the sci-fi book text
+
+**Semantic search quality:**
+- "mystery novels set in Tokyo" → "The Neon Veil" ranks first (relevance=0.56), even though the title contains neither "mystery" nor "Tokyo". The system matched via the LLM-generated summary and embedding — proving the full pipeline works.
+- "science fiction about time travel" → "Chrono Drift" ranks first, again matching via semantic meaning not keywords.
+- "detective investigating disappearances in Japan" → Still finds "The Neon Veil" — demonstrating that the embeddings capture the conceptual content of the book, not just surface-level vocabulary.
+
+These results validate our architectural decisions: embedding the summary (not just title/description) provides rich semantic signal, and GPT-5.4 Nano + text-embedding-3-small deliver high-quality results at low cost.
 

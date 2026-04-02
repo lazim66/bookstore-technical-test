@@ -1,6 +1,9 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 from src.db.models import DBUser
 from src.routes.v1.books.schema import BookCreateInput, BookDetailOutput, BookOutput, BookUpdateInput, SearchResultOutput
 from src.routes.v1.books.service import BookService, get_book_service
@@ -29,11 +32,16 @@ async def create_book(
         # Background: generate summary, then embedding (chained)
         background_tasks.add_task(summary_service.generate_for_book, book.id)
     else:
-        # No full_text — generate embedding synchronously from title + description
-        embedding = await summary_service.generate_embedding_for_text(
-            title=book.title, description=book.description, summary=None,
-        )
-        await book_service.update(book_id=book.id, data=BookUpdateInput(embedding=embedding))
+        # No full_text — generate embedding from title + description.
+        # Non-critical: if embedding fails, book is still created and
+        # can be embedded later via backfill.
+        try:
+            embedding = await summary_service.generate_embedding_for_text(
+                title=book.title, description=book.description, summary=None,
+            )
+            await book_service.update(book_id=book.id, data=BookUpdateInput(embedding=embedding))
+        except Exception:
+            logger.warning("Embedding generation failed for book %s, will retry via backfill", book.id)
 
     return BookDetailOutput(**book.model_dump())
 
@@ -125,8 +133,11 @@ async def update_book(
         title = changed_fields.get("title", current_book.title)
         description = changed_fields.get("description", current_book.description)
         summary = changed_fields.get("summary", current_book.summary)
-        embedding = await summary_service.generate_embedding_for_text(title, description, summary)
-        changed_fields["embedding"] = embedding
+        try:
+            embedding = await summary_service.generate_embedding_for_text(title, description, summary)
+            changed_fields["embedding"] = embedding
+        except Exception:
+            logger.warning("Embedding regeneration failed for book %s", book_id)
 
     book = await book_service.update(book_id=book_id, data=BookUpdateInput(**changed_fields))
 
