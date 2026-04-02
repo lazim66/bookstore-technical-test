@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     SEED_ADMIN_PASSWORD: str = "admin123secure"
     SEED_ADMIN_FULL_NAME: str = "System Admin"
 
+    # LLM (OpenAI)
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-5.4-nano"
+    LLM_MAX_CONCURRENT_REQUESTS: int = 5
+
     @computed_field
     @property
     def DATABASE_URL(self) -> str:

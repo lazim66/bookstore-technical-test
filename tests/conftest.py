@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 from src.db.models import DBUser
@@ -21,34 +21,36 @@ from src.utils.auth import authenticate_user, hash_password
 
 
 @pytest_asyncio.fixture(scope="function")
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    # Create test engine - matching db/operations.py pattern
-    async_engine = create_async_engine(
+async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
+    """Create an isolated async engine for each test."""
+    engine = create_async_engine(
         settings.DATABASE_URL,
         pool_size=settings.DATABASE_POOL_SIZE,
         max_overflow=settings.DATABASE_POOL_SIZE_OVERFLOW,
         echo=False,
     )
 
-    # Create tables
-    async with async_engine.begin() as conn:
+    async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 
-    # Create session factory - matching db/operations.py pattern
-    AsyncSessionLocal = async_sessionmaker(async_engine, class_=ManagedAsyncSession, expire_on_commit=False)
+    yield engine
 
-    async with AsyncSessionLocal() as session:
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.drop_all)
+
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def db_session(test_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
+    session_factory = async_sessionmaker(test_engine, class_=ManagedAsyncSession, expire_on_commit=False)
+
+    async with session_factory() as session:
         try:
             yield session
         except Exception:
             await session.rollback()
             raise
-
-    # Cleanup: drop all tables
-    async with async_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
-
-    await async_engine.dispose()
 
 
 @pytest_asyncio.fixture

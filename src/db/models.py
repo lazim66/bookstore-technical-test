@@ -42,6 +42,8 @@ class DBBook(SQLModel, table=True):
     title: str = Field(index=True)
     author_id: UUID = Field(foreign_key="authors.id", index=True)
     description: str | None = Field(default=None)
+    full_text: str | None = Field(default=None)
+    summary: str | None = Field(default=None)
     price: float
     published_date: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow)

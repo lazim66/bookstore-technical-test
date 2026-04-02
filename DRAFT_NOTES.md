@@ -170,3 +170,54 @@ To support cleanup, we added `DELETE /api/v1/users/{user_id}` (admin-only, hard 
 
 Moved `seed_admin()` from `app_lifespan.py` to a dedicated `src/utils/seed.py` module. The lifespan handler now only manages infrastructure (DB connections, table creation) and calls `run_all_seeds()`. The seed logic is also callable independently via `just seed` / `scripts/seed.py` for re-seeding after a `db-reset` without restarting the API. This separates infrastructure lifecycle from business data seeding.
 
+---
+
+## Feature 2: Book Summaries
+
+### Requirements (from README)
+- Books need summaries to help customers decide what to read
+- When admins add books with full book text, the system should automatically generate customer-friendly summaries using an LLM
+- A backfill operation for books added before this feature existed — admin-triggered, processes multiple books
+- The system needs to handle many books being added or summarized concurrently
+
+### Decisions & Approach
+
+**Decision 1: Schema changes — add `full_text` and `summary` to `DBBook`**
+- `full_text: str | None` — the complete book text, provided by admins when creating/updating a book
+- `summary: str | None` — the LLM-generated summary, also editable by admins via `PATCH /books/{id}`
+- Summaries are auto-generated but admin-editable. The README says "automatically generate" but allowing admin overrides is zero-cost (the field is already on the update schema) and is pragmatically useful — admins may want to tweak a generated summary for tone or accuracy.
+
+**Decision 2: LLM model selection — GPT-5.4 Nano via OpenAI**
+- Summarization is a straightforward task that doesn't need frontier-model intelligence. We chose GPT-5.4 Nano because it offers an excellent cost-to-capability ratio: $0.20/M input tokens, a 400K context window (comfortably handles full book texts in a single pass), and is OpenAI's latest-generation model optimised for tasks like classification and data extraction — which summarization falls under. Compared to larger models in the GPT-5.4 family or alternatives like Claude Haiku, it's significantly cheaper while being more than sufficient for our needs.
+- The model is configurable via `OPENAI_MODEL` env var so it can be swapped without code changes.
+- We use a simple LLM service abstraction — just enough to keep the OpenAI SDK details out of business logic and make testing straightforward via dependency injection.
+
+**Decision 3: Generation timing — FastAPI BackgroundTasks (async, non-blocking)**
+- When an admin creates a book with `full_text`, the API returns 201 immediately, and summary generation runs as a background task
+- Why not synchronous (inline): LLM calls take 5-15 seconds. Blocking the request degrades admin UX and risks timeouts. The admin doesn't need to see the summary immediately — they just need confirmation the book was created.
+- Why not Celery/task queue: Adds infrastructure complexity (worker process, broker config, serialization) that's disproportionate for this use case. For a production system with retry guarantees and distributed processing, Celery would be the right choice — we note this as a future improvement. BackgroundTasks is the right level of complexity for this scope.
+- Trade-off acknowledged: BackgroundTasks are not persistent — if the server crashes mid-generation, the task is lost. The backfill endpoint serves as a recovery mechanism (re-trigger summaries for books that still lack them).
+
+**Decision 4: Concurrency control — `asyncio.Semaphore` with configurable limit**
+- When many books are backfilled simultaneously, we limit concurrent LLM API calls using an `asyncio.Semaphore`
+- The limit is configurable via `LLM_MAX_CONCURRENT_REQUESTS` env var (default: 5), allowing tuning per environment (higher in production with better rate limits, lower in dev)
+- How it works: `asyncio.gather` fires all backfill tasks concurrently, but each task must acquire the semaphore before making an LLM call. At most N calls run simultaneously; the rest queue up. This prevents rate-limit errors and resource exhaustion without sacrificing throughput.
+- Why not `asyncio.Queue` with workers: More complex (producer-consumer pattern) for the same result. Semaphore is the standard, minimal pattern for "limit concurrent access to an external resource."
+- Why not no control: Firing 50+ simultaneous LLM API calls would hit provider rate limits, cause 429 errors, and potentially exhaust connection pools.
+
+**Decision 5: API design — per-book + batch backfill endpoints**
+- `POST /api/v1/books/{id}/summarize` (admin-only): Trigger summary generation for a single book. Useful for re-generating a stale or poor-quality summary, or after updating a book's `full_text`.
+- `POST /api/v1/books/backfill-summaries` (admin-only): Trigger summary generation for all books that have `full_text` but no `summary`. Returns the count of books queued. This is the concurrency showcase — the semaphore controls parallel LLM calls.
+- The per-book endpoint is the atomic operation; the backfill endpoint composes it across multiple books. This keeps the code DRY and gives admins granular control.
+
+**Decision 6: Testing strategy**
+- **Unit tests (mocked LLM)**: The LLM service is injected via FastAPI's dependency system. Tests override it with an `AsyncMock` that returns a canned summary. This tests the full flow (create book → background task → summary populated) without real API calls.
+- **Concurrency test**: Fire N concurrent summary requests with a mock that includes a small `asyncio.sleep` delay. Track concurrent execution via a counter to verify the semaphore limits parallelism to the configured max. This directly tests the README's concurrency requirement.
+- **Smoke test**: One real LLM call for a single book to verify the API key, model, and prompt work end-to-end against the live stack.
+
+### Implementation Lessons
+
+**Session isolation shaped the architecture.** Our initial design had the `SummaryService` using `managed_session()` directly for all DB operations. This worked in production but broke in tests — the test session creates data within an uncommitted transaction, and the summary service's independent sessions couldn't see it. This forced a cleaner design: the service accepts an injectable session factory, and we split the API into two modes — `generate_summary_text()` (pure LLM call, caller manages DB) for synchronous endpoints, and `generate_for_book()` (owns its DB session) for background tasks and concurrent backfill. The result is actually better separated than the original design.
+
+**Code review caught `full_text` leaking in list responses.** The initial `BookOutput` included `full_text`, which would serialise potentially large book texts for every item in list responses. We split into `BookOutput` (for lists) and `BookDetailOutput` (for single-book retrieval). A good reminder that response schemas should be designed from the consumer's perspective, not just the data model.
+
