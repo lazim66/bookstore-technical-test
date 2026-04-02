@@ -3,13 +3,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
-logger = logging.getLogger(__name__)
 from src.db.models import DBUser
 from src.routes.v1.books.schema import BookCreateInput, BookDetailOutput, BookOutput, BookUpdateInput, SearchResultOutput
 from src.routes.v1.books.service import BookService, get_book_service
 from src.routes.v1.books.summary_service import BackfillResult, SummaryService
 from src.utils.auth import authenticate_user, require_admin
 from src.utils.llm import LLMService, get_llm_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/books", tags=["books"])
 

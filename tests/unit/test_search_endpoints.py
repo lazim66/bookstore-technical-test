@@ -22,12 +22,8 @@ import pytest
 from httpx import AsyncClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 from src.db.models import DBBook, EMBEDDING_DIMENSIONS
-from src.main import app
 from src.routes.v1.authors.schema import AuthorCreateInput
 from src.routes.v1.authors.service import AuthorService
-from src.routes.v1.books.schema import BookCreateInput
-from src.routes.v1.books.service import BookService
-from src.utils.llm import get_llm_service
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

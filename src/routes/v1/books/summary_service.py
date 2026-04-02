@@ -62,22 +62,27 @@ class SummaryService:
 
     # ── Self-contained operations (own DB session) ───────────────────────
 
+    async def _fetch_book(self, session, book_id: uuid.UUID, label: str) -> DBBook | None:
+        """Fetch a book by ID from the given session, logging a warning if not found."""
+        stmt = select(DBBook).where(DBBook.id == book_id)
+        result = await session.exec(stmt)
+        book = result.first()
+        if not book:
+            logger.warning("Book %s not found for %s", book_id, label)
+        return book
+
     async def generate_for_book(self, book_id: uuid.UUID) -> bool:
         """Generate summary AND embedding for a single book.
 
         Creates its own DB session, making it safe to run concurrently
         via asyncio.gather and as a background task.
 
-        Flow: fetch book → generate summary → generate embedding → persist both.
+        Flow: fetch book -> generate summary -> generate embedding -> persist both.
         Returns True if successful, False otherwise.
         """
         async with self._session_factory() as session:
-            stmt = select(DBBook).where(DBBook.id == book_id)
-            result = await session.exec(stmt)
-            book = result.first()
-
+            book = await self._fetch_book(session, book_id, "generation")
             if not book:
-                logger.warning("Book %s not found for generation", book_id)
                 return False
 
             if not book.full_text:
@@ -102,15 +107,11 @@ class SummaryService:
         """Generate (or regenerate) the embedding for a single book.
 
         Uses the book's current title, description, and summary.
-        Own DB session — safe for concurrent use.
+        Own DB session -- safe for concurrent use.
         """
         async with self._session_factory() as session:
-            stmt = select(DBBook).where(DBBook.id == book_id)
-            result = await session.exec(stmt)
-            book = result.first()
-
+            book = await self._fetch_book(session, book_id, "embedding")
             if not book:
-                logger.warning("Book %s not found for embedding", book_id)
                 return False
 
             try:
@@ -125,32 +126,30 @@ class SummaryService:
 
     # ── Backfill operations ──────────────────────────────────────────────
 
-    async def backfill(self) -> BackfillResult:
-        """Generate summaries and embeddings for books that need them.
-
-        Targets books with full_text but no summary. Each book gets its own
-        DB session. The LLM service's semaphore controls parallelism.
-        """
+    async def _run_backfill(
+        self,
+        where_clauses: list,
+        task_fn: Callable[[uuid.UUID], asyncio.coroutines],
+        label: str,
+    ) -> BackfillResult:
+        """Shared backfill logic: query matching book IDs, run task_fn on each concurrently."""
         async with self._session_factory() as session:
-            stmt = select(DBBook.id).where(
-                DBBook.full_text.isnot(None),  # noqa: E711
-                DBBook.summary.is_(None),  # noqa: E711
-            )
+            stmt = select(DBBook.id).where(*where_clauses)
             result = await session.exec(stmt)
             book_ids = list(result.all())
 
         if not book_ids:
-            logger.info("No books need summary backfill")
+            logger.info("No books need %s backfill", label)
             return BackfillResult(attempted=0, succeeded=0, failed=0, book_ids=[])
 
-        logger.info("Backfilling summaries and embeddings for %d books", len(book_ids))
+        logger.info("Backfilling %s for %d books", label, len(book_ids))
 
         results = await asyncio.gather(
-            *(self.generate_for_book(book_id) for book_id in book_ids)
+            *(task_fn(book_id) for book_id in book_ids)
         )
 
         succeeded = sum(1 for r in results if r)
-        failed = sum(1 for r in results if not r)
+        failed = len(book_ids) - succeeded
         logger.info("Backfill complete: %d succeeded, %d failed", succeeded, failed)
 
         return BackfillResult(
@@ -160,35 +159,29 @@ class SummaryService:
             book_ids=book_ids,
         )
 
+    async def backfill(self) -> BackfillResult:
+        """Generate summaries and embeddings for books that need them.
+
+        Targets books with full_text but no summary. Each book gets its own
+        DB session. The LLM service's semaphore controls parallelism.
+        """
+        return await self._run_backfill(
+            where_clauses=[
+                DBBook.full_text.isnot(None),  # noqa: E711
+                DBBook.summary.is_(None),  # noqa: E711
+            ],
+            task_fn=self.generate_for_book,
+            label="summaries and embeddings",
+        )
+
     async def backfill_embeddings(self) -> BackfillResult:
         """Regenerate embeddings for all books that have no embedding.
 
         Useful after bulk summary generation, or for books created before
         the embedding feature existed.
         """
-        async with self._session_factory() as session:
-            stmt = select(DBBook.id).where(
-                DBBook.embedding.is_(None),  # noqa: E711
-            )
-            result = await session.exec(stmt)
-            book_ids = list(result.all())
-
-        if not book_ids:
-            logger.info("No books need embedding backfill")
-            return BackfillResult(attempted=0, succeeded=0, failed=0, book_ids=[])
-
-        logger.info("Backfilling embeddings for %d books", len(book_ids))
-
-        results = await asyncio.gather(
-            *(self.generate_embedding_for_book(book_id) for book_id in book_ids)
-        )
-
-        succeeded = sum(1 for r in results if r)
-        failed = sum(1 for r in results if not r)
-
-        return BackfillResult(
-            attempted=len(book_ids),
-            succeeded=succeeded,
-            failed=failed,
-            book_ids=book_ids,
+        return await self._run_backfill(
+            where_clauses=[DBBook.embedding.is_(None)],  # noqa: E711
+            task_fn=self.generate_embedding_for_book,
+            label="embeddings",
         )

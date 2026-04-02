@@ -145,17 +145,26 @@ We needed a way to verify the live API end-to-end beyond the mocked pytest suite
 
 ### How it works
 
-`just smoke-test` (or `python3 scripts/smoke_test.py`) runs 27 checks across 8 user stories against `http://localhost:8080`:
-1. Health check
-2. Customer signup → login → profile (real Redis session)
-3. Seed admin login (verifies bootstrap worked)
-4. Admin creates author + book + updates price
-5. Customer browses catalog (read access confirmed)
-6. Customer denied all catalog writes (6 × 403)
-7. Customer order lifecycle (create → list → view → update)
-8. Admin user management (create → promote → demote)
+`just smoke-test` (or `python3 scripts/smoke_test.py`) runs 42 checks across 11 user stories against `http://localhost:8080`, covering all three deliverables:
 
-Output is a narrated log — reviewers read it and immediately understand the permission model and user flows without reading code.
+**Permissions (Feature 1):**
+1. Real auth flow: signup → password hashing → login → Redis session → bearer token
+2. Seed admin login (verifies bootstrap worked)
+3. Admin catalog management (create author, book, update price)
+4. Customer browse catalog (read-only access)
+5. Customer denied all catalog writes (6 × 403)
+6. Customer order lifecycle (create → list → view → update)
+7. Admin user management (create → promote → demote)
+8. Unauthenticated request rejection
+
+**Summaries (Feature 2) — real OpenAI LLM calls:**
+9. Auto-generation: create book with full_text → summary appears via background task
+10. Explicit /summarize endpoint: admin triggers summary on demand
+
+**Semantic Search (Feature 3) — real OpenAI embedding calls:**
+11. Natural language search with README example queries, proving results come from semantic understanding rather than keyword matching
+
+Output is a narrated log — reviewers read it and immediately understand the permission model, summary generation quality, and semantic search accuracy without reading code.
 
 ### Cleanup and idempotency
 
@@ -309,4 +318,18 @@ We ran the full smoke test against the live API with real OpenAI calls. Key obse
 - "detective investigating disappearances in Japan" → Still finds "The Neon Veil" — demonstrating that the embeddings capture the conceptual content of the book, not just surface-level vocabulary.
 
 These results validate our architectural decisions: embedding the summary (not just title/description) provides rich semantic signal, and GPT-5.4 Nano + text-embedding-3-small deliver high-quality results at low cost.
+
+---
+
+## Reflection: The value of the smoke test
+
+Looking back, adding the smoke test script was one of the most impactful decisions in this project. What started as a simple "verify the live API works" tool became essential across all three features:
+
+1. **Catching real integration bugs that unit tests miss.** The unit tests mock all external services — they can't catch issues like OpenAI API parameter incompatibilities, quota exhaustion causing 500 errors on book creation, or session isolation bugs between concurrent DB connections. The smoke test caught all of these, each time leading us back to improve the application code.
+
+2. **Validating LLM output quality.** Unit tests verify "a summary was generated" but not "the summary is actually useful." The smoke test shows the real LLM output — the generated summaries, the search rankings — so we (and reviewers) can judge quality directly. This is the only way to verify the prompt engineering works.
+
+3. **Proving semantic search works via meaning, not keywords.** The test deliberately uses book titles that omit search-relevant keywords. When "mystery novels set in Tokyo" still finds "The Neon Veil," it proves the full pipeline: LLM summary → embedding → cosine similarity → semantic matching. No mocked test can demonstrate this.
+
+4. **Reviewer experience.** Running `just smoke-test` gives a reviewer a complete, narrated walkthrough of every feature in under a minute. Each section explains what it's testing and why, with the actual LLM outputs visible. It reads like a guided tour of the application.
 

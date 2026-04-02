@@ -168,6 +168,7 @@ def login(client: httpx.Client, email: str, password: str) -> dict[str, str]:
 
 def test_health(client: httpx.Client) -> None:
     _r.header("Health check")
+    print("    Verify the API is running and reachable")
     r = client.get(f"{BASE_URL}/health")
     _r.check("GET", "/health", r, 200)
 
@@ -175,7 +176,8 @@ def test_health(client: httpx.Client) -> None:
 def test_customer_signup_and_login(
     client: httpx.Client, tracker: ResourceTracker
 ) -> dict[str, str]:
-    _r.header("Customer: signup → login → profile")
+    _r.header("Auth: real signup → login → session token flow")
+    print("    Tests the full auth chain: password hashing, Redis session, bearer token")
 
     email = f"smoke_customer_{uuid.uuid4().hex[:8]}@test.com"
     password = "smokepassword123"
@@ -199,7 +201,8 @@ def test_customer_signup_and_login(
 
 
 def test_seed_admin_login(client: httpx.Client) -> dict[str, str]:
-    _r.header("Admin: seed admin login")
+    _r.header("Auth: seed admin login")
+    print("    Verify the bootstrap admin (created on startup) can authenticate")
 
     r = client.post(f"{API_URL}/users/login", json={
         "email": SEED_ADMIN_EMAIL, "password": SEED_ADMIN_PASSWORD,
@@ -213,7 +216,8 @@ def test_seed_admin_login(client: httpx.Client) -> dict[str, str]:
 def test_admin_catalog_management(
     client: httpx.Client, admin_headers: dict[str, str], tracker: ResourceTracker
 ) -> tuple[str, str]:
-    _r.header("Admin: catalog management (create author, book, update price)")
+    _r.header("Permissions: admin can manage catalog")
+    print("    Admins can create authors, books, and update prices")
 
     r = client.post(f"{API_URL}/authors", headers=admin_headers, json={
         "name": "Smoke Test Author", "bio": "Written by a smoke test",
@@ -250,7 +254,15 @@ def test_admin_creates_books_with_text(
     so semantic search must work via summaries/embeddings, not keywords.
     Returns (mystery_book_id, scifi_book_id).
     """
-    _r.header("Admin: create books with full_text for LLM features")
+    _r.header("Setup: create books with full text for LLM feature testing")
+    print("    Creating two books whose titles/descriptions deliberately omit")
+    print("    genre keywords — this lets us prove semantic search works via")
+    print("    LLM-generated summaries and embeddings, not keyword matching.")
+    print()
+    print('    Book 1: "The Neon Veil" (desc: "A debut novel")')
+    print("      → Content is a Tokyo detective mystery, but title doesn't say so")
+    print('    Book 2: "Chrono Drift" (desc: "An epic saga")')
+    print("      → Content is sci-fi about time travel, but title doesn't say so")
 
     r = client.post(f"{API_URL}/books", headers=admin_headers, json={
         "title": "The Neon Veil",
@@ -259,7 +271,7 @@ def test_admin_creates_books_with_text(
         "full_text": SAMPLE_BOOK_TEXT,
         "price": 19.99,
     })
-    _r.check("POST", "/books", r, 201, "mystery book — title has no mystery/Tokyo keywords")
+    _r.check("POST", "/books", r, 201, '"The Neon Veil" created with full text')
     mystery_id = r.json()["id"]
     tracker.book_ids.append(mystery_id)
 
@@ -270,11 +282,9 @@ def test_admin_creates_books_with_text(
         "full_text": SAMPLE_SCIFI_TEXT,
         "price": 24.99,
     })
-    _r.check("POST", "/books", r, 201, "sci-fi book — title has no time travel keywords")
+    _r.check("POST", "/books", r, 201, '"Chrono Drift" created with full text')
     scifi_id = r.json()["id"]
     tracker.book_ids.append(scifi_id)
-
-    print("    (Titles deliberately omit search keywords to test semantic matching)")
 
     return mystery_id, scifi_id
 
@@ -282,7 +292,8 @@ def test_admin_creates_books_with_text(
 def test_customer_can_browse_catalog(
     client: httpx.Client, customer_headers: dict[str, str], book_id: str
 ) -> None:
-    _r.header("Customer: catalog browsing (read-only access)")
+    _r.header("Permissions: customer can browse catalog (read-only)")
+    print("    Customers can list and view authors and books but not modify them")
 
     r = client.get(f"{API_URL}/authors", headers=customer_headers)
     _r.check("GET", "/authors", r, 200, f"{len(r.json())} author(s)")
@@ -300,7 +311,8 @@ def test_customer_denied_catalog_writes(
     author_id: str,
     book_id: str,
 ) -> None:
-    _r.header("Customer: permission denial on catalog writes (expect 403)")
+    _r.header("Permissions: customer denied catalog writes (403)")
+    print("    Verify customers cannot create, update, or delete books/authors")
 
     for method, path, json_body in [
         ("POST", "/authors", {"name": "Nope"}),
@@ -320,7 +332,8 @@ def test_customer_can_place_and_manage_orders(
     book_id: str,
     tracker: ResourceTracker,
 ) -> None:
-    _r.header("Customer: order lifecycle (create → list → view → update)")
+    _r.header("Orders: customer can place and manage own orders")
+    print("    Full order lifecycle: place order → list → view → update quantity")
 
     r = client.post(f"{API_URL}/orders", headers=customer_headers, json={
         "book_id": book_id, "quantity": 2,
@@ -344,7 +357,8 @@ def test_customer_can_place_and_manage_orders(
 def test_admin_user_management(
     client: httpx.Client, admin_headers: dict[str, str], tracker: ResourceTracker
 ) -> None:
-    _r.header("Admin: user management (create → promote → demote)")
+    _r.header("Permissions: admin user management (create → promote → demote)")
+    print("    Admin can create users, promote to admin, and demote back")
 
     email = f"smoke_staff_{uuid.uuid4().hex[:8]}@test.com"
     r = client.post(f"{API_URL}/users", headers=admin_headers, json={
@@ -366,7 +380,8 @@ def test_admin_user_management(
 
 
 def test_unauthenticated_requests_rejected(client: httpx.Client) -> None:
-    _r.header("Unauthenticated: requests rejected")
+    _r.header("Auth: unauthenticated requests rejected")
+    print("    Requests without a bearer token are rejected")
 
     r = client.get(f"{API_URL}/books")
     _r.check("GET", "/books", r, 403, "no token")
@@ -384,8 +399,13 @@ def test_book_summary_generation(
     book_id: str,
 ) -> None:
     """Verify summary is auto-generated in background for a book with full_text."""
-    _r.header("Summary: auto-generation for 'The Neon Veil' (real LLM)")
-    print("    Source: ~300-word mystery text set in Tokyo's Shinjuku district")
+    _r.header("Summary: auto-generation (background task, real LLM)")
+    print('    When a book is created with full_text, the system automatically')
+    print("    generates a customer-friendly summary using GPT-5.4 Nano.")
+    print("    This runs as a background task — the book is created immediately,")
+    print("    and the summary appears shortly after.")
+    print()
+    print('    Testing with "The Neon Veil" (~300 words, Tokyo detective mystery)')
 
     # Summary is generated in background — poll until it appears
     summary = None
@@ -425,8 +445,12 @@ def test_book_summary_via_summarize_endpoint(
     book_id: str,
 ) -> None:
     """Generate summary via the explicit /summarize endpoint."""
-    _r.header("Summary: /summarize endpoint for 'Chrono Drift' (real LLM)")
-    print("    Source: ~250-word sci-fi text about time travel and temporal fractures")
+    _r.header("Summary: explicit /summarize endpoint (real LLM)")
+    print("    Admins can also trigger summary generation on demand for a specific")
+    print("    book via POST /books/{id}/summarize — useful for regenerating a")
+    print("    stale summary or processing books added before the feature existed.")
+    print()
+    print('    Testing with "Chrono Drift" (~250 words, sci-fi about time travel)')
 
     # Wait for any background task to complete first
     time.sleep(5)
@@ -462,9 +486,18 @@ def test_semantic_search(
     "mystery novels set in Tokyo" via the summary and embedding.
     """
     _r.header("Search: semantic search with natural language (real embeddings)")
-    print("    Testing README examples — titles don't contain search keywords")
+    print("    Customers can search using natural language queries. The system")
+    print("    embeds the query and finds books by cosine similarity against")
+    print("    book embeddings (built from title + description + LLM summary).")
+    print()
+    print("    Key test: the book titles/descriptions do NOT contain the search")
+    print("    keywords. Matches come from the LLM-generated summaries and")
+    print("    embeddings — proving semantic understanding, not keyword matching.")
 
     # Test 1: "mystery novels set in Tokyo"
+    print()
+    print('    Query 1: "mystery novels set in Tokyo"')
+    print('    Expected: "The Neon Veil" (title has no mystery/Tokyo keywords)')
     r = client.get(
         f"{API_URL}/books/search",
         params={"q": "mystery novels set in Tokyo"},
@@ -492,6 +525,9 @@ def test_semantic_search(
         )
 
     # Test 2: "science fiction about time travel"
+    print()
+    print('    Query 2: "science fiction about time travel"')
+    print('    Expected: "Chrono Drift" (title has no sci-fi/time travel keywords)')
     r = client.get(
         f"{API_URL}/books/search",
         params={"q": "science fiction about time travel"},
@@ -515,9 +551,10 @@ def test_semantic_search(
             scores == sorted(scores, reverse=True),
         )
 
-    # Test 4: Search works even though exact words aren't in title/description
-    # "The Neon Veil" title doesn't contain "mystery" or "Tokyo"
-    # "Chrono Drift" title doesn't contain "science fiction" or "time travel"
+    # Test 4: Completely different phrasing — tests semantic understanding
+    print()
+    print('    Query 3: "detective investigating disappearances in Japan"')
+    print("    Expected: Still finds the mystery book via semantic meaning")
     r = client.get(
         f"{API_URL}/books/search",
         params={"q": "detective investigating disappearances in Japan"},
