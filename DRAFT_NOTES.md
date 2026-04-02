@@ -228,3 +228,61 @@ A second code review pass across the permissions code caught three issues worth 
 - **Self-protection guard**: Added checks preventing admins from deleting their own account or changing their own role — otherwise an admin could accidentally lock out all admin access.
 - **Signup role injection test**: Added a test that explicitly passes `"role": "admin"` in a signup payload and verifies it's ignored, ensuring users cannot self-assign admin privileges.
 
+---
+
+## Feature 3: Semantic Search
+
+### Requirements (from README)
+- Customers find books using natural language (not exact keyword matches)
+- Example queries: "mystery novels set in Tokyo", "science fiction about time travel"
+- Relevant results even if exact words don't appear in titles or descriptions
+- Results ranked by relevance
+- pgvector extension available in the database
+
+### Decisions & Approach
+
+**Summary length control (refinement from Feature 2):**
+- Tightened the LLM prompt to specify "150-250 words" explicitly, and reduced `max_tokens` from 1024 to 512. The prompt instruction controls the actual length; `max_tokens` acts as a safety net preventing runaway output while leaving enough headroom (~370 words) to avoid mid-sentence truncation. Keeping summaries concise also benefits embeddings — shorter, focused text produces less semantic dilution in the vector.
+
+**Decision 1: Vector storage — pgvector with HNSW index**
+- Add an `embedding` column to `DBBook` using pgvector's `VECTOR(1536)` type
+- Use an HNSW index with cosine distance for approximate nearest-neighbour search
+- HNSW chosen over IVFFlat because it can be created on an empty table (no training step), has better query performance, and is the recommended default for datasets under millions of rows
+
+**Decision 2: Embedding model — `text-embedding-3-small`**
+- Both `text-embedding-3-small` (1536 dims) and `text-embedding-3-large` (3072 dims) support 8,191 input tokens — more than enough for our use case since we're embedding short text (title + description + summary, ~200-500 tokens)
+- We chose `text-embedding-3-small` because for short embedded texts, the quality difference is negligible, while it costs 6.5x less ($0.02/M vs $0.13/M tokens) and uses half the storage per vector
+- Configurable via `OPENAI_EMBEDDING_MODEL` env var
+
+**Decision 3: What to embed — title + description + summary**
+- We considered three options:
+  - *Title + description only*: Thin semantic signal. A book titled "The Tokyo Shadow" with description "A gripping novel" would barely match "mystery novels set in Tokyo."
+  - *Title + description + summary*: The LLM-generated summary captures themes, genre, setting, and tone — exactly what customers search by. A summary mentioning "detective navigates Tokyo's underworld in this atmospheric mystery" gives the embedding strong signal for mystery + Tokyo + detective queries.
+  - *Full book text with chunking*: Both embedding models max out at 8,191 tokens (~6,000 words), while novels are 60,000-100,000+ words. This would require splitting books into hundreds of chunks, storing multiple vectors per book, and aggregating results — a full RAG pipeline that's disproportionate for a bookstore search feature. Research also confirms that "embedding a large, multi-topic text into a single vector dilutes its meaning."
+- We chose title + description + summary because the summary is a semantic compression of the entire book into 2-3 paragraphs, purpose-built for discovery. Including AI-generated content in embeddings is no different from indexing a human-written book blurb — it's a condensed representation of the book's content optimised for matching customer intent.
+
+**Decision 4: When to generate embeddings — chained with summary generation**
+- This decision is tightly coupled with Decision 3: since the embedding includes the summary, the embedding should be generated after the summary exists.
+- We considered two approaches:
+  - *Approach A (chosen): Chain embedding after summary in the background task.* When a book is created with full_text, the background task generates the summary, then generates the embedding (title + desc + summary) in sequence. For books without full_text, the embedding is generated synchronously (title + desc only). On book updates, the embedding is regenerated synchronously.
+  - *Approach B: Generate embedding synchronously on create (without summary), then regenerate after summary arrives.* This creates two embedding generations per book, doubles the cost, and adds a "progressively improving embedding" state that's harder to reason about.
+- We chose Approach A for simplicity and consistency: one code path per scenario, the embedding always reflects the latest state, and the system is predictable. The trade-off — books with full_text aren't searchable for ~10 seconds while the background task runs — is acceptable because admins don't expect instant search availability.
+
+| Trigger | Summary | Embedding | Timing |
+|---------|---------|-----------|--------|
+| Create book **with** full_text | Generate | Generate (title + desc + summary) | Background — chained |
+| Create book **without** full_text | Skip | Generate (title + desc) | Synchronous |
+| Update book | Skip | Regenerate with current fields | Synchronous |
+| Backfill | Generate missing summaries | Regenerate all embeddings | Admin-triggered endpoint |
+
+**Decision 5: Search API — dedicated endpoint with relevance scores**
+- `GET /api/v1/books/search?q=...` — separate from the list endpoint
+- Returns results ranked by cosine similarity with a relevance score per result
+- Accessible to any authenticated user (customers need to search)
+- A dedicated endpoint makes the intent explicit and avoids conflating listing with searching
+
+**Decision 6: Testing strategy**
+- **Unit tests with mocked embeddings**: Seed books with known vectors in the test DB. Verify search returns results in correct relevance order, handles edge cases (empty query, no results), and respects the response schema.
+- **Semantic quality tests**: Seed books matching the README's examples ("mystery set in Tokyo", "sci-fi about time travel", irrelevant "cookbook"). Verify the right books rank first for the matching queries.
+- **Smoke test**: Real OpenAI embedding call + real search against the live API to verify end-to-end integration.
+

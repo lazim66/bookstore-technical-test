@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 SUMMARY_SYSTEM_PROMPT = (
     "You are a helpful bookstore assistant. Generate a concise, engaging summary "
     "of the following book text that helps customers decide whether to read it. "
-    "The summary should be 2-3 paragraphs, written for a general audience. "
-    "Focus on the main themes, plot overview (without major spoilers), and what "
-    "makes the book compelling. Do not include any preamble — start directly with "
-    "the summary."
+    "The summary must be exactly 2-3 short paragraphs (150-250 words total), "
+    "written for a general audience. Focus on the main themes, plot overview "
+    "(without major spoilers), and what makes the book compelling. "
+    "Do not include any preamble — start directly with the summary."
 )
 
 
@@ -47,7 +47,7 @@ class LLMService:
                     {"role": "user", "content": text},
                 ],
                 temperature=0.7,
-                max_tokens=1024,
+                max_tokens=512,
             )
             content = response.choices[0].message.content
             if not content:
